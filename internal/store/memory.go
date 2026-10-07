@@ -112,8 +112,8 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	return inspection, nil
 }
 
-// AddQueen 关闭原有产卵蜂王并写入新蜂王，两件事在同一把锁内完成，
-// 保证任意时刻同一蜂箱至多只有一只 laying 蜂王。
+// AddQueen 在同一把写锁内写入新蜂王；closeQueenID 非空时先关闭指定蜂王。
+// 关闭后的唯一性检查也在同一把锁内完成，保证任意时刻同一蜂箱至多只有一只 laying 蜂王。
 func (m *Memory) AddQueen(
 	hiveID string,
 	queen domain.Queen,
@@ -131,10 +131,17 @@ func (m *Memory) AddQueen(
 		return domain.Queen{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受换王", hiveID, hive.State)
 	}
 	if closeQueenID != "" {
+		if closeQueenID != hive.ActiveQueenID {
+			return domain.Queen{}, domain.Conflict("蜂王 %q 不是蜂箱 %q 的当前产卵蜂王", closeQueenID, hiveID)
+		}
 		if err := m.closeQueenLocked(hiveID, closeQueenID, closeState, now); err != nil {
 			return domain.Queen{}, err
 		}
 	}
+	if _, index := m.layingQueenLocked(hiveID); index >= 0 {
+		return domain.Queen{}, domain.Conflict("蜂箱 %q 已有产卵蜂王，不能重复建立", hiveID)
+	}
+
 	m.queenSeq++
 	queen.ID = fmt.Sprintf("queen-%06d", m.queenSeq)
 	queen.HiveID = hiveID
@@ -144,6 +151,48 @@ func (m *Memory) AddQueen(
 	hive.ActiveQueenID = queen.ID
 	m.hives[hiveID] = hive
 	return queen, nil
+}
+
+// CloseActiveQueen 只关闭调用方指定的当前产卵蜂王并清空蜂箱的当前蜂王编号，不建立新记录。
+func (m *Memory) CloseActiveQueen(hiveID, expectedQueenID string, state domain.QueenState, closedAt time.Time) (domain.Queen, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	hive, ok := m.hives[hiveID]
+	if !ok {
+		return domain.Queen{}, domain.NotFound("蜂箱", hiveID)
+	}
+	if !hive.AcceptsQueenChange() {
+		return domain.Queen{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受换王", hiveID, hive.State)
+	}
+	if len(m.queens[hiveID]) == 0 {
+		return domain.Queen{}, domain.InvalidState("蜂箱 %q 还没有产卵蜂王记录", hiveID)
+	}
+	if hive.ActiveQueenID == "" || expectedQueenID != hive.ActiveQueenID {
+		return domain.Queen{}, domain.Conflict("蜂箱 %q 的产卵蜂王已变化，请重新读取后再登记", hiveID)
+	}
+	if err := m.closeQueenLocked(hiveID, hive.ActiveQueenID, state, closedAt); err != nil {
+		return domain.Queen{}, err
+	}
+	items := m.queens[hiveID]
+	closed := domain.Queen{}
+	for _, item := range items {
+		if item.ID == hive.ActiveQueenID {
+			closed = item
+			break
+		}
+	}
+	hive.ActiveQueenID = ""
+	m.hives[hiveID] = hive
+	return closed, nil
+}
+
+func (m *Memory) layingQueenLocked(hiveID string) (domain.Queen, int) {
+	for index, item := range m.queens[hiveID] {
+		if item.IsLaying() {
+			return item, index
+		}
+	}
+	return domain.Queen{}, -1
 }
 
 func (m *Memory) closeQueenLocked(hiveID, queenID string, state domain.QueenState, now time.Time) error {

@@ -129,13 +129,47 @@ func checkReplaceQueen(c *client) error {
 	}, 201, `"queen-000001"`, `"markColor":"white"`, `"state":"laying"`); err != nil {
 		return err
 	}
+	if _, err := c.expect("POST", "/hives/hive-01/queens/loss", map[string]any{
+		"observedAt": "2026-04-10T08:00:00Z",
+	}, 200, `"queen-000001"`, `"state":"lost"`, `"closedAt":"2026-04-10T08:00:00Z"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("GET", "/hives/hive-01", nil, 200, `"activeQueenId":""`); err != nil {
+		return err
+	}
+	if _, err := c.expect("GET", "/apiaries/apiary-north/status?asOf=2026-04-10T09:00:00Z", nil, 200,
+		`"layingQueens":0`, `"queenId":""`); err != nil {
+		return err
+	}
+	if _, err := c.expect("POST", "/hives/hive-01/queens/loss", map[string]any{}, 409,
+		`"code":"conflict"`); err != nil {
+		return err
+	}
 	if _, err := c.expect("POST", "/hives/hive-01/queens", map[string]any{
-		"origin": "cells", "introducedAt": "2026-04-20T08:00:00Z", "reason": "aggression",
-	}, 201, `"queen-000002"`, `"markColor":"white"`); err != nil {
+		"origin": "cells", "introducedAt": "2026-04-20T08:00:00Z",
+	}, 201, `"queen-000002"`, `"markColor":"white"`, `"state":"laying"`); err != nil {
 		return err
 	}
 	if _, err := c.expect("GET", "/hives/hive-01/queens", nil, 200,
-		`"queen-000001"`, `"superseded"`, `"queen-000002"`); err != nil {
+		`"queen-000001"`, `"lost"`, `"queen-000002"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("GET", "/apiaries/apiary-north/status?asOf=2026-04-20T09:00:00Z", nil, 200,
+		`"layingQueens":1`, `"queenId":"queen-000002"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("POST", "/hives/hive-01/queens", map[string]any{
+		"origin": "swarm", "introducedAt": "2026-04-25T08:00:00Z",
+	}, 409, `"code":"conflict"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("POST", "/hives/hive-01/queens", map[string]any{
+		"origin": "swarm", "introducedAt": "2026-04-25T08:00:00Z", "reason": "aggression",
+	}, 201, `"queen-000003"`, `"markColor":"blue"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("GET", "/hives/hive-01/queens", nil, 200,
+		`"queen-000002"`, `"superseded"`, `"queen-000003"`); err != nil {
 		return err
 	}
 	if _, err := c.expect("POST", "/hives/hive-01/queens", map[string]any{
@@ -145,6 +179,10 @@ func checkReplaceQueen(c *client) error {
 	}
 	if _, err := c.expect("POST", "/hives/hive-01/state", map[string]any{"target": "retired"}, 200,
 		`"to":"retired"`); err != nil {
+		return err
+	}
+	if _, err := c.expect("POST", "/hives/hive-01/queens/loss", map[string]any{}, 409,
+		`"code":"invalid_state"`); err != nil {
 		return err
 	}
 	if _, err := c.expect("POST", "/hives/hive-01/queens", map[string]any{

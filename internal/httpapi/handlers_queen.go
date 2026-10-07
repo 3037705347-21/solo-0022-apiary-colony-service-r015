@@ -13,6 +13,33 @@ type replaceQueenRequest struct {
 	Reason       string `json:"reason"`
 }
 
+type reportQueenLossRequest struct {
+	ObservedAt string `json:"observedAt"`
+}
+
+func (s *Server) handleReportQueenLoss(w http.ResponseWriter, r *http.Request) {
+	var request reportQueenLossRequest
+	if err := decodeJSON(w, r, &request); err != nil {
+		writeError(w, err)
+		return
+	}
+	observedAt, err := parseOptionalTime("observedAt", request.ObservedAt)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	input := queen.LossInput{}
+	if observedAt != nil {
+		input.ObservedAt = *observedAt
+	}
+	record, err := s.deps.Queen.ReportLoss(r.PathValue("hiveId"), input)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, record)
+}
+
 func (s *Server) handleReplaceQueen(w http.ResponseWriter, r *http.Request) {
 	var request replaceQueenRequest
 	if err := decodeJSON(w, r, &request); err != nil {

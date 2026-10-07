@@ -40,9 +40,13 @@
 
 ### 更换蜂王（replace-queen）
 
-协调人向 `POST /hives/{hiveId}/queens` 提交蜂王来源、引入时间与原因。服务确认蜂箱存在
-且未退役，关闭原有产卵蜂王记录，建立新的蜂王记录并写入由引入年份推导的标记色。
-已退役蜂箱返回状态错误。
+现场确认失王与获得新蜂王可能发生在不同时间。协调人先向
+`POST /hives/{hiveId}/queens/loss` 提交可选的确认时间，服务确认蜂箱存在且未退役，关闭当前
+产卵蜂王记录，清空蜂箱的当前蜂王编号，但不建立新记录。重复登记失王返回冲突。
+
+之后协调人向 `POST /hives/{hiveId}/queens` 提交新蜂王来源与引入时间。蜂箱没有当前产卵蜂王时，
+`reason` 可省略，服务只建立新的产卵蜂王并写入由引入年份推导的标记色；已有当前产卵蜂王时，
+仍须提供 `reason`，服务在同一把写锁内关闭旧记录并建立新记录。已退役蜂箱返回状态错误。
 
 ### 推进蜂群状态（advance-hive-state）
 
@@ -68,7 +72,9 @@
 
 - 状态：`laying`（正常产卵）、`superseded`（被替换）、`lost`（失王）。
 - 允许迁移：`laying->superseded`、`laying->lost`。
-- 不变量：同一蜂箱同时最多只有一只 `laying` 蜂王；`superseded` 与 `lost` 记录不可再改。
+- 不变量：同一蜂箱同时最多只有一只 `laying` 蜂王；失王登记后蜂箱没有当前产卵蜂王；
+  重复失王登记或并发的失王/建王请求必须串行化为唯一最终事实；`superseded` 与 `lost`
+  记录不可再改。
 - 标记色由引入年份个位推导：`1/6` 白、`2/7` 黄、`3/8` 红、`4/9` 绿、`5/0` 蓝。
 
 ### 巡检规则
@@ -112,7 +118,8 @@
 - `POST /apiaries`、`GET /apiaries/{apiaryId}`：录入与读回蜂场。
 - `POST /apiaries/{apiaryId}/hives`、`GET /hives/{hiveId}`：安装与读回蜂箱。
 - `POST /hives/{hiveId}/inspections`、`GET /hives/{hiveId}/inspections`：提交与列出巡检。
-- `POST /hives/{hiveId}/queens`：更换蜂王。
+- `POST /hives/{hiveId}/queens/loss`：登记失王并关闭当前产卵蜂王，不建立新蜂王。
+- `POST /hives/{hiveId}/queens`：失王后建立新产卵蜂王，或在有当前蜂王时一次完成换王。
 - `POST /hives/{hiveId}/state`：推进蜂群状态。
 - `GET /apiaries/{apiaryId}/status`：读取蜂场状态汇总。
 

@@ -13,7 +13,7 @@ const (
 	ReasonLoss       = "loss"
 )
 
-// Service 处理换王：关闭旧蜂王记录并写入带标记色的新记录。
+// Service 处理蜂王生命周期：登记失王、只建立新产卵蜂王，或一次完成换王。
 type Service struct {
 	store *store.Memory
 	clock func() time.Time
@@ -32,6 +32,45 @@ type ReplaceInput struct {
 	Reason       string
 }
 
+type LossInput struct {
+	ObservedAt time.Time
+}
+
+type EstablishInput struct {
+	Origin       string
+	IntroducedAt time.Time
+}
+
+// ReportLoss 只登记失王事实：关闭当前产卵记录，并让蜂箱暂时没有当前蜂王。
+func (s *Service) ReportLoss(hiveID string, input LossInput) (domain.Queen, error) {
+	hive, ok := s.store.GetHive(hiveID)
+	if !ok {
+		return domain.Queen{}, domain.NotFound("蜂箱", hiveID)
+	}
+	observedAt := input.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = s.clock()
+	}
+	return s.store.CloseActiveQueen(hiveID, hive.ActiveQueenID, domain.QueenLost, observedAt)
+}
+
+// Establish 在失王之后建立新的产卵蜂王；不会关闭旧记录。
+func (s *Service) Establish(hiveID string, input EstablishInput) (domain.Queen, error) {
+	origin, err := ParseOrigin(input.Origin)
+	if err != nil {
+		return domain.Queen{}, err
+	}
+	introducedAt := input.IntroducedAt
+	if introducedAt.IsZero() {
+		introducedAt = s.clock()
+	}
+	record, err := domain.NewQueen(hiveID, introducedAt, origin, ColorForIntroduction(introducedAt))
+	if err != nil {
+		return domain.Queen{}, err
+	}
+	return s.store.AddQueen(hiveID, record, "", "", s.clock())
+}
+
 func (s *Service) Replace(hiveID string, input ReplaceInput) (domain.Queen, error) {
 	hive, ok := s.store.GetHive(hiveID)
 	if !ok {
@@ -41,15 +80,18 @@ func (s *Service) Replace(hiveID string, input ReplaceInput) (domain.Queen, erro
 	if err != nil {
 		return domain.Queen{}, err
 	}
-	reason, err := ParseReason(input.Reason)
-	if err != nil {
-		return domain.Queen{}, err
-	}
 	introducedAt := input.IntroducedAt
 	if introducedAt.IsZero() {
 		introducedAt = s.clock()
 	}
 	record, err := domain.NewQueen(hiveID, introducedAt, origin, ColorForIntroduction(introducedAt))
+	if err != nil {
+		return domain.Queen{}, err
+	}
+	if hive.ActiveQueenID == "" {
+		return s.store.AddQueen(hiveID, record, "", "", s.clock())
+	}
+	reason, err := ParseReason(input.Reason)
 	if err != nil {
 		return domain.Queen{}, err
 	}
