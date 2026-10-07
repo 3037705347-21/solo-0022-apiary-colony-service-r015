@@ -49,8 +49,11 @@ go run ./cmd/check -workflow read-apiary-status
 - `POST /hives/{hiveId}/inspections`：输入 `observedAt`（可选，RFC3339）、`colonyStrength`、
   `broodPattern`、`temper`、`miteCount`、`note`，返回巡检与派生关注项。
 - `GET /hives/{hiveId}/inspections`：列出巡检。
-- `POST /hives/{hiveId}/queens`：输入 `origin`、`introducedAt`（可选）、`reason`，
-  返回带标记色的新蜂王记录。
+- `POST /hives/{hiveId}/queens`：输入 `origin`、`introducedAt`（可选）、`reason`（可选，
+  `aging` 或 `aggression`），建立或更换产卵蜂王，返回带标记色的新蜂王记录。失王状态下调用
+  即重新建立产卵蜂王。
+- `POST /hives/{hiveId}/queens/loss`：输入可选 `observedAt`（RFC3339），只登记失王事实：
+  关闭当前产卵蜂王记录为 `lost` 并清空活动蜂王，不新建蜂王；没有产卵蜂王时返回冲突。
 - `GET /hives/{hiveId}/queens`：列出蜂王记录。
 - `GET /apiaries/{apiaryId}/status`：可选查询参数 `asOf`（RFC3339），返回状态计数、
   待巡检蜂箱、有未处理关注项的蜂箱与逐蜂箱摘要。
@@ -68,7 +71,10 @@ go run ./cmd/check -workflow read-apiary-status
 - 蜂群状态：`colonized` 可到 `production`，`production` 与 `wintering` 可互相切换，
   三者都可到终态 `retired`；迁移到自身视为冲突。
 - 已退役蜂箱不再接受巡检与换王。
-- 同一蜂箱任意时刻最多一只 `laying` 蜂王，换王会先关闭旧记录。
+- 同一蜂箱任意时刻最多一只 `laying` 蜂王；更换时先把旧记录关为 `superseded`，
+  登记失王则只把旧记录关为 `lost`、不新建蜂王，之后再用新记录重新建立。
+- 失王登记重复提交（蜂箱已无产卵蜂王）返回冲突；失王登记与建立新王并发提交时，
+  最终蜂箱要么失王、要么只有唯一一只产卵蜂王。
 - 蜂王标记色由引入年份个位推导：`1/6` 白、`2/7` 黄、`3/8` 红、`4/9` 绿、`5/0` 蓝。
 - 巡检关注项阈值：螨计数 ≥ 9 记 `mite_load`，子脾为 `none` 记 `brood_gap`，
   性情为 `aggressive` 记 `temper_risk`，群势 ≤ 2 记 `low_strength`。

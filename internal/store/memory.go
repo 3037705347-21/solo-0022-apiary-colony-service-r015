@@ -112,15 +112,10 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	return inspection, nil
 }
 
-// AddQueen 关闭原有产卵蜂王并写入新蜂王，两件事在同一把锁内完成，
-// 保证任意时刻同一蜂箱至多只有一只 laying 蜂王。
-func (m *Memory) AddQueen(
-	hiveID string,
-	queen domain.Queen,
-	closeQueenID string,
-	closeState domain.QueenState,
-	now time.Time,
-) (domain.Queen, error) {
+// EstablishQueen 关闭原有产卵蜂王并写入新蜂王，两件事在同一把锁内完成，
+// 保证任意时刻同一蜂箱至多只有一只 laying 蜂王。失王（无活动蜂王）期间调用
+// 即视为重新建立产卵蜂王，不会再出现第二条 laying 记录。
+func (m *Memory) EstablishQueen(hiveID string, queen domain.Queen, now time.Time) (domain.Queen, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	hive, ok := m.hives[hiveID]
@@ -130,8 +125,8 @@ func (m *Memory) AddQueen(
 	if !hive.AcceptsQueenChange() {
 		return domain.Queen{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受换王", hiveID, hive.State)
 	}
-	if closeQueenID != "" {
-		if err := m.closeQueenLocked(hiveID, closeQueenID, closeState, now); err != nil {
+	if hive.ActiveQueenID != "" {
+		if _, err := m.closeQueenLocked(hiveID, hive.ActiveQueenID, domain.QueenSuperseded, now); err != nil {
 			return domain.Queen{}, err
 		}
 	}
@@ -146,23 +141,50 @@ func (m *Memory) AddQueen(
 	return queen, nil
 }
 
-func (m *Memory) closeQueenLocked(hiveID, queenID string, state domain.QueenState, now time.Time) error {
+// ReportQueenLoss 在同一把锁内关闭当前产卵蜂王（置为 lost）并清空活动蜂王，
+// 但不新建蜂王记录，使蜂箱立即进入无产卵蜂王状态。蜂箱已处于失王状态时
+// 返回冲突，从而让重复登记与并发提交收敛到唯一事实。
+func (m *Memory) ReportQueenLoss(hiveID string, now time.Time) (domain.Queen, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	hive, ok := m.hives[hiveID]
+	if !ok {
+		return domain.Queen{}, domain.NotFound("蜂箱", hiveID)
+	}
+	if !hive.AcceptsQueenChange() {
+		return domain.Queen{}, domain.InvalidState("蜂箱 %q 处于 %q 状态，不接受换王", hiveID, hive.State)
+	}
+	activeID := hive.ActiveQueenID
+	if activeID == "" {
+		return domain.Queen{}, domain.InvalidState("蜂箱 %q 当前没有产卵蜂王，不能登记失王", hiveID)
+	}
+	closed, err := m.closeQueenLocked(hiveID, activeID, domain.QueenLost, now)
+	if err != nil {
+		return domain.Queen{}, err
+	}
+	hive.ActiveQueenID = ""
+	m.hives[hiveID] = hive
+	return closed, nil
+}
+
+// closeQueenLocked 在已持锁的前提下关闭指定蜂王，并返回关闭后的记录。
+func (m *Memory) closeQueenLocked(hiveID, queenID string, state domain.QueenState, now time.Time) (domain.Queen, error) {
 	items := m.queens[hiveID]
 	for index, item := range items {
 		if item.ID != queenID {
 			continue
 		}
 		if !item.IsLaying() {
-			return domain.Conflict("蜂王 %q 已经关闭", queenID)
+			return domain.Queen{}, domain.Conflict("蜂王 %q 已经关闭", queenID)
 		}
 		closedAt := now.UTC()
 		item.State = state
 		item.ClosedAt = &closedAt
 		items[index] = item
 		m.queens[hiveID] = items
-		return nil
+		return item, nil
 	}
-	return domain.Storage("蜂箱 %q 上的蜂王 %q 记录缺失", hiveID, queenID)
+	return domain.Queen{}, domain.Storage("蜂箱 %q 上的蜂王 %q 记录缺失", hiveID, queenID)
 }
 
 func (m *Memory) ListInspections(hiveID string) ([]domain.Inspection, error) {

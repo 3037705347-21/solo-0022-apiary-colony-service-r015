@@ -10,10 +10,9 @@ import (
 const (
 	ReasonAging      = "aging"
 	ReasonAggression = "aggression"
-	ReasonLoss       = "loss"
 )
 
-// Service 处理换王：关闭旧蜂王记录并写入带标记色的新记录。
+// Service 处理蜂王生命周期：登记失王（只关闭旧记录）与建立/更换产卵蜂王。
 type Service struct {
 	store *store.Memory
 	clock func() time.Time
@@ -26,24 +25,30 @@ func New(memory *store.Memory, clock func() time.Time) *Service {
 	return &Service{store: memory, clock: clock}
 }
 
-type ReplaceInput struct {
+type EstablishInput struct {
 	Origin       string
 	IntroducedAt time.Time
 	Reason       string
 }
 
-func (s *Service) Replace(hiveID string, input ReplaceInput) (domain.Queen, error) {
-	hive, ok := s.store.GetHive(hiveID)
-	if !ok {
+type LossInput struct {
+	ObservedAt time.Time
+}
+
+// Establish 建立或更换蜂箱的产卵蜂王：存在产卵蜂王时先关闭为 superseded，
+// 失王期间调用则直接重新建立。失王事实只能通过 ReportLoss 单独登记。
+func (s *Service) Establish(hiveID string, input EstablishInput) (domain.Queen, error) {
+	if _, ok := s.store.GetHive(hiveID); !ok {
 		return domain.Queen{}, domain.NotFound("蜂箱", hiveID)
 	}
 	origin, err := ParseOrigin(input.Origin)
 	if err != nil {
 		return domain.Queen{}, err
 	}
-	reason, err := ParseReason(input.Reason)
-	if err != nil {
-		return domain.Queen{}, err
+	if domain.TrimText(input.Reason) != "" {
+		if _, err := ParseReason(input.Reason); err != nil {
+			return domain.Queen{}, err
+		}
 	}
 	introducedAt := input.IntroducedAt
 	if introducedAt.IsZero() {
@@ -53,11 +58,19 @@ func (s *Service) Replace(hiveID string, input ReplaceInput) (domain.Queen, erro
 	if err != nil {
 		return domain.Queen{}, err
 	}
-	closeState := domain.QueenSuperseded
-	if reason == ReasonLoss {
-		closeState = domain.QueenLost
+	return s.store.EstablishQueen(hiveID, record, s.clock())
+}
+
+// ReportLoss 仅登记失王事实：关闭当前产卵蜂王记录但不新建蜂王。
+func (s *Service) ReportLoss(hiveID string, input LossInput) (domain.Queen, error) {
+	if _, ok := s.store.GetHive(hiveID); !ok {
+		return domain.Queen{}, domain.NotFound("蜂箱", hiveID)
 	}
-	return s.store.AddQueen(hiveID, record, hive.ActiveQueenID, closeState, s.clock())
+	observedAt := input.ObservedAt
+	if observedAt.IsZero() {
+		observedAt = s.clock()
+	}
+	return s.store.ReportQueenLoss(hiveID, observedAt)
 }
 
 func (s *Service) List(hiveID string) ([]domain.Queen, error) {
@@ -76,12 +89,18 @@ func ParseOrigin(value string) (domain.QueenOrigin, error) {
 	return origin, nil
 }
 
+// ParseReason 校验建立/更换产卵王的原因。失王不是建立原因：
+// 失王事实必须通过单独的失王登记入口提交。
 func ParseReason(value string) (string, error) {
 	reason := domain.TrimText(value)
 	switch reason {
-	case ReasonAging, ReasonAggression, ReasonLoss:
+	case ReasonAging, ReasonAggression:
 		return reason, nil
 	default:
-		return "", domain.Invalid("reason", "reason 必须是 %s、%s 或 %s", ReasonAging, ReasonAggression, ReasonLoss)
+		return "", domain.Invalid(
+			"reason",
+			"reason 必须是 %s 或 %s；确认失王请走失王登记入口",
+			ReasonAging, ReasonAggression,
+		)
 	}
 }

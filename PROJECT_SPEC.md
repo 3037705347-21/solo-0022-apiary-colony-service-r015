@@ -40,9 +40,19 @@
 
 ### 更换蜂王（replace-queen）
 
-协调人向 `POST /hives/{hiveId}/queens` 提交蜂王来源、引入时间与原因。服务确认蜂箱存在
-且未退役，关闭原有产卵蜂王记录，建立新的蜂王记录并写入由引入年份推导的标记色。
-已退役蜂箱返回状态错误。
+蜂王事实分两个独立写入口，协调人可以先登记失王、再择机建立新王：
+
+- 登记失王：协调人向 `POST /hives/{hiveId}/queens/loss` 提交可选的确认时间。服务确认蜂箱存在
+  且未退役后，把当前产卵蜂王记录关闭为 `lost` 并清空蜂箱的活动蜂王，**不新建蜂王记录**。
+  蜂箱当前没有产卵蜂王（从未建王，或已失王）时返回状态错误，因此重复登记失王只会成功一次。
+- 建立/更换产卵蜂王：协调人向 `POST /hives/{hiveId}/queens` 提交蜂王来源、引入时间与可选原因。
+  服务确认蜂箱存在且未退役：存在产卵蜂王时先关闭为 `superseded`，失王期间则直接重新建立；
+  随后写入新蜂王记录并按引入年份推导标记色。失王不是建立原因（`reason` 不接受 `loss`），
+  确认失王必须走失王登记入口。已退役蜂箱返回状态错误。
+
+登记失王后，蜂箱在蜂箱读回与状态汇总中都不再显示有产卵蜂王；重新建立时关闭与写入在同一把
+锁内完成，不会出现两只 `laying` 记录。失王登记与建立新王并发提交时，以蜂箱活动蜂王编号为
+唯一事实源串行裁决：失王至多成功一次，最终蜂箱要么处于失王、要么只有唯一一只产卵蜂王。
 
 ### 推进蜂群状态（advance-hive-state）
 
@@ -68,7 +78,8 @@
 
 - 状态：`laying`（正常产卵）、`superseded`（被替换）、`lost`（失王）。
 - 允许迁移：`laying->superseded`、`laying->lost`。
-- 不变量：同一蜂箱同时最多只有一只 `laying` 蜂王；`superseded` 与 `lost` 记录不可再改。
+- 不变量：同一蜂箱同时最多只有一只 `laying` 蜂王；失王登记只关闭旧记录、不新建蜂王；
+  蜂箱没有产卵蜂王时重复登记失王返回冲突；`superseded` 与 `lost` 记录不可再改。
 - 标记色由引入年份个位推导：`1/6` 白、`2/7` 黄、`3/8` 红、`4/9` 绿、`5/0` 蓝。
 
 ### 巡检规则
@@ -112,7 +123,8 @@
 - `POST /apiaries`、`GET /apiaries/{apiaryId}`：录入与读回蜂场。
 - `POST /apiaries/{apiaryId}/hives`、`GET /hives/{hiveId}`：安装与读回蜂箱。
 - `POST /hives/{hiveId}/inspections`、`GET /hives/{hiveId}/inspections`：提交与列出巡检。
-- `POST /hives/{hiveId}/queens`：更换蜂王。
+- `POST /hives/{hiveId}/queens`：建立或更换产卵蜂王（存在旧产卵王时关闭为 superseded）。
+- `POST /hives/{hiveId}/queens/loss`：登记失王，关闭原产卵记录为 lost，不新建蜂王。
 - `POST /hives/{hiveId}/state`：推进蜂群状态。
 - `GET /apiaries/{apiaryId}/status`：读取蜂场状态汇总。
 

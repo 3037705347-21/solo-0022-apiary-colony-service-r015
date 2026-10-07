@@ -52,10 +52,14 @@
       "id": "replace-queen",
       "name": "更换蜂王",
       "entry": "POST /hives/{hiveId}/queens",
-      "steps": ["确认蜂箱存在且未退役", "关闭原产卵蜂王记录", "建立新蜂王并推导标记色"],
-      "success": "返回 201 与新蜂王记录（含标记色）",
-      "failure": "未知蜂箱返回未找到，已退役返回状态错误，来源非法返回校验错误",
-      "verification": "校验入口连续更换两次蜂王并断言旧记录被置为 superseded",
+      "steps": [
+        "确认蜂箱存在且未退役",
+        "登记失王（POST /hives/{hiveId}/queens/loss）只关闭原产卵蜂王为 lost，不新建蜂王",
+        "建立/更换产卵蜂王：存在旧记录时关闭为 superseded，失王期间直接重建并推导标记色"
+      ],
+      "success": "失王登记返回 200 与关闭后的 lost 记录；建立新王返回 201 与新蜂王记录（含标记色）",
+      "failure": "未知蜂箱返回未找到，已退役返回状态错误，来源非法返回校验错误，无产卵蜂王时重复登记失王返回冲突",
+      "verification": "校验入口连续更换、登记失王、重建，并断言重复失王与失王/建王并发交错后仍只有唯一产卵蜂王",
       "module_ids": ["httpapi", "queen", "domain", "store"]
     },
     {
